@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 An AI-powered interactive learning application built with React + Vite. The app allows users to generate custom educational curriculums by describing what they want to learn, then uses Claude API to generate complete courses with lessons, code examples, and quizzes.
 
-Originally created as a static web development curriculum, the app has been refactored to support **dynamic curriculum generation** where users provide free-form text input and AI generates the entire curriculum structure and content.
+The app uses a **two-phase curriculum generation approach** to avoid timeouts and provide progressive loading.
 
 ## Development Commands
 
@@ -25,33 +25,66 @@ npm run build
 npm run preview
 ```
 
+**Important:** Server must be restarted after changing `.env` file.
+
 ## Architecture
 
 ### Single-Component Design
-The entire application is contained in `src/App.jsx` (~1700 lines). This is intentional - the app uses a monolithic component structure rather than splitting into multiple files.
+The entire application is contained in `src/App.jsx` (~1800 lines). This is intentional - the app uses a monolithic component structure rather than splitting into multiple files.
 
-**Key architectural pattern:**
+**Key architectural patterns:**
 - All state managed with `useState` hooks (no Redux, Context API, or external state libraries)
 - Conditional rendering used extensively to show/hide different UI sections
-- All AI API calls use the same pattern with progress tracking
+- All AI API calls share common helper functions
+
+### Two-Phase Curriculum Generation
+
+**Critical Architecture Pattern** to avoid timeouts on large curriculum generation:
+
+**Phase 1: Generate Outline** (fast, ~5 seconds)
+- Single API call requesting only module and page titles
+- Creates structure for 10 modules × 3 pages each
+- Max tokens: 2,000
+
+**Phase 2: Progressive Module Generation** (3-5 minutes total)
+- 10 separate API calls, one per module
+- Each call generates: 3 full pages + 7 quiz questions
+- Max tokens per module: 5,000
+- Modules appear in UI as they're generated (progressive loading)
+- Total: 11 API calls (1 outline + 10 modules)
+
+**Implementation:**
+```javascript
+// Phase 1: Outline
+const outline = await generateOutline(userInput);
+setCurriculumOutline(outline);
+
+// Phase 2: Modules (sequential loop)
+for (let i = 0; i < outline.modules.length; i++) {
+  const module = await generateModule(outlineModule.title, outlineModule.pages, i);
+  modules.push(module);
+  setGeneratedModules([...modules]); // Display immediately
+  if (i === 0) setShowInputForm(false); // Switch to curriculum view
+}
+```
 
 ### Dual Curriculum System
 
 The app supports two curriculum modes:
 
-1. **Static Curriculum** (`staticModules` array, line ~231)
+1. **Static Curriculum** (`staticModules` array, line ~1000)
    - Original 6-module web development course
    - Hardcoded in App.jsx
    - Serves as fallback and example
 
 2. **Dynamic Curriculum** (`generatedModules` state)
    - User describes what they want to learn
-   - AI generates modules, pages, quizzes, and content
+   - AI generates 10 modules, 3 pages each, 7 quiz questions per module
    - Uses same data structure as static curriculum
 
-**Module selection logic (line ~988):**
+**Module selection logic:**
 ```javascript
-const modules = curriculumGenerated ? generatedModules : staticModules;
+const modules = generatedModules.length > 0 ? generatedModules : staticModules;
 ```
 
 ### Data Structure
@@ -77,7 +110,7 @@ Both static and generated curriculums follow this structure:
 }
 ```
 
-### State Variables (22 total)
+### State Variables (24 total)
 
 **Navigation (3):**
 - `currentModule`, `currentPage`, `showMenu`
@@ -91,48 +124,61 @@ Both static and generated curriculums follow this structure:
 **Chat (4):**
 - `showChat`, `chatMessages`, `chatInput`, `chatProgress`
 
-**Curriculum Generation (7):**
+**Curriculum Generation (9):**
 - `curriculumGenerated`, `generatingCurriculum`, `userInput`
 - `curriculumProgress`, `generatedModules`, `showInputForm`, `generationError`
+- `curriculumOutline`, `generationStatus`
 
 ### Key Functions
 
 **Curriculum Generation:**
-- `generateCurriculum()` (line ~86) - Main AI curriculum generation
-- `resetToInputForm()` (line ~213) - Reset to input form
+- `callAPI()` (line ~88) - Shared API helper with error handling
+- `parseJSON()` (line ~114) - Parse JSON with markdown extraction fallback
+- `generateOutline()` (line ~127) - Phase 1: Generate module/page titles
+- `generateModule()` (line ~161) - Phase 2: Generate full module content
+- `generateCurriculum()` (line ~211) - Main orchestrator for two-phase generation
+- `resetToInputForm()` (line ~260) - Reset to input form
 
 **AI Features:**
-- `generateAIQuiz()` (line ~1146) - Generate quiz questions
-- `generateReviewMaterial()` (line ~1198) - Personalized review
-- `sendChatMessage()` (line ~1252) - Chat assistant
+- `generateAIQuiz()` - Generate dynamic quiz questions
+- `generateReviewMaterial()` - Personalized review based on wrong answers
+- `sendChatMessage()` - Context-aware chat assistant
 
 **Content Rendering:**
-- `renderContent()` (line ~41) - Parse and render Python code blocks with line numbers
+- `renderContent()` (line ~43) - Parse and render Python code blocks with line numbers
 
 ## API Integration
 
 ### Anthropic Claude API
 
-All AI features call `https://api.anthropic.com/v1/messages` with this pattern:
-
+**Critical Header Required:** All browser-based API calls MUST include:
 ```javascript
-fetch('/api/v1/messages', {  // Uses Vite proxy
+'anthropic-dangerous-direct-browser-access': 'true'
+```
+
+Without this header, requests will fail with 401 authentication error.
+
+**API Call Pattern:**
+```javascript
+const response = await fetch('/api/v1/messages', {  // Uses Vite proxy
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
     'x-api-key': apiKey,  // From VITE_ANTHROPIC_API_KEY
-    'anthropic-version': '2023-06-01'
+    'anthropic-version': '2023-06-01',
+    'anthropic-dangerous-direct-browser-access': 'true'  // REQUIRED
   },
   body: JSON.stringify({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 1000-16000,  // Varies by feature
+    max_tokens: 2000-5000,  // Varies by feature
     messages: [{ role: 'user', content: prompt }]
   })
 })
 ```
 
 **Token limits by feature:**
-- Curriculum generation: 16,000 tokens
+- Curriculum outline: 2,000 tokens
+- Module generation: 5,000 tokens per module
 - Quiz generation: 2,000 tokens
 - Review material: 1,500 tokens
 - Chat responses: 1,000 tokens
@@ -141,13 +187,14 @@ fetch('/api/v1/messages', {  // Uses Vite proxy
 
 `vite.config.js` includes a proxy to avoid CORS issues:
 - Requests to `/api/*` are forwarded to `https://api.anthropic.com/*`
+- Timeout: 180 seconds (3 minutes) to handle module generation
 - API key is sent from client in headers
 
 ### Environment Variables
 
 `.env` file (required):
 ```
-VITE_ANTHROPIC_API_KEY=sk-ant-...
+VITE_ANTHROPIC_API_KEY=sk-ant-api03-...
 ```
 
 Access in code: `import.meta.env.VITE_ANTHROPIC_API_KEY`
@@ -164,53 +211,34 @@ The app includes a custom Python code renderer:
 4. **Indentation:** `whitespace-pre` CSS class preserves spaces
 5. **Scrolling:** `max-h-96 overflow-y-auto` for long code
 
-## Progress Tracking Pattern
-
-All async AI operations use this pattern:
-
-```javascript
-const progressInterval = setInterval(() => {
-  setProgress(prev => Math.min(prev + Math.random() * 8, 95));
-}, 300-800);
-
-try {
-  // API call
-  setProgress(100);
-  setTimeout(() => {
-    clearInterval(progressInterval);
-    setIsGenerating(false);
-    setProgress(0);
-  }, 500);
-} catch (error) {
-  clearInterval(progressInterval);
-  setIsGenerating(false);
-  setProgress(0);
-}
-```
-
-**Always cleanup intervals** in both success and error paths.
-
 ## UI Flow
 
 ### Initial Load
-1. User sees input form (`InputFormComponent`, line ~1314)
-2. Form includes examples and "View Default Curriculum" option
-3. User can describe what they want to learn or use default
+1. User sees input form with examples
+2. Form includes "View Default Curriculum" option
+3. User describes what they want to learn or uses default
+
+### During Generation
+1. Progress bar appears on input form (0-100%)
+2. Status updates: "Creating curriculum outline...", "Generating module 1/10: ..."
+3. Progress: 5% (outline) → 10-100% (modules)
+4. Input form remains visible until first module completes
+5. After module 1: switches to curriculum view
+6. Remaining modules appear progressively in menu
 
 ### After Generation
-1. Progress bar shows 0-100% during 30-60 second generation
-2. On success, `showInputForm` becomes false, curriculum displays
-3. "New Curriculum" button in header allows starting over
-4. All original features work with generated curriculum
+1. Full curriculum displays with 10 modules
+2. "New Curriculum" button in header allows starting over
+3. All features work with generated curriculum
 
 ### Conditional Rendering Structure
 ```jsx
 {showInputForm ? (
-  <InputFormComponent />
+  <InputFormComponent with progress bar />
 ) : (
   <>
     <Header with "New Curriculum" button />
-    <Module Menu />
+    <Module Menu (shows all generated modules) />
     <Course Pages />
     <Quizzes />
     <Chat Window />
@@ -221,12 +249,16 @@ try {
 
 ## AI Prompt Engineering
 
-### Curriculum Generation Prompt
+### Curriculum Outline Prompt
 - **Critical requirement:** "Return ONLY valid JSON, no markdown formatting"
-- **Structure specification:** Provides exact JSON schema
-- **Content guidelines:** 4-6 modules, 2-4 pages each, 2-4 quiz questions
-- **Code examples:** Instructs to include ```python blocks or relevant language
-- **Style:** Conversational, educational, explains WHY not just WHAT
+- **Structure:** 10 modules, each with 3 page titles
+- **Max tokens:** 2,000 (fast response)
+
+### Module Generation Prompt
+- **Critical requirement:** "Return ONLY valid JSON"
+- **Structure:** 3 full pages (300-500 words each) + 7 quiz questions
+- **Content guidelines:** Educational, practical examples, code blocks
+- **Max tokens:** 5,000 per module
 
 ### JSON Parsing Strategy
 1. Try direct `JSON.parse()`
@@ -235,20 +267,42 @@ try {
 
 ## Common Pitfalls
 
-1. **JSX Fragment Matching:** Ensure `<>` and `</>` are properly paired
-2. **Interval Cleanup:** Always clear intervals in try/catch/finally
-3. **API Key Issues:** Must restart server after changing `.env`
-4. **CORS Errors:** All API calls must use `/api/` proxy path
-5. **State Dependencies:** Curriculum must be generated before setting `showInputForm = false`
+1. **Missing Browser Header:** API calls fail with 401 without `anthropic-dangerous-direct-browser-access: true`
+2. **API Key Issues:** Must restart server after changing `.env`
+3. **Rate Limits:** Too many rapid requests trigger 429 errors (wait 10-15 min)
+4. **Timeouts:** Single large API calls timeout - hence the two-phase approach
+5. **State Dependencies:** Input form hides only after first module is generated
+6. **HMR Focus Issues:** Hot reload can cause input focus loss during development
+
+## Debugging
+
+**Browser Console Access:**
+- **Mac:** Cmd+Option+J (Chrome) or Cmd+Option+I (DevTools)
+- **Windows/Linux:** F12 or Ctrl+Shift+I
+
+**When debugging API issues:**
+1. Open Network tab BEFORE making request
+2. Look for `/api/v1/messages` requests
+3. Check Response tab for actual error messages
+4. Status 401 = missing header or invalid API key
+5. Status 429 = rate limit (wait and retry)
+6. Pending → timeout or still processing
+
+**Console logs show:**
+- "Generating outline for: [topic]"
+- "Outline generated: {modules: Array(10)}"
+- "Generating module 1/10: [title]"
+- "Module 1 generated successfully"
+- Errors with stack traces
 
 ## Testing Generated Features
 
 To test curriculum generation:
 1. Start dev server: `npm run dev`
-2. Enter text like: "I want to learn React hooks including useState, useEffect, and custom hooks"
-3. Wait 30-60 seconds
-4. Verify modules, pages, and quizzes render correctly
-5. Test existing features (AI quiz, review, chat) work with generated content
+2. Enter specific topic (e.g., "AWS Lambda basics")
+3. Wait for outline (5 sec) + modules (3-5 min total)
+4. Verify progressive module appearance in menu
+5. Test all features (quiz, review, chat) work with generated content
 
 ## Known Constraints
 
@@ -257,6 +311,7 @@ To test curriculum generation:
 - Single-file architecture (intentional design choice)
 - Client-side API key (visible in browser, acceptable for personal use)
 - No backend/database
+- Sequential module generation (not parallel, to avoid rate limits)
 
 ## Styling
 
@@ -270,6 +325,7 @@ To test curriculum generation:
 If enhancing this app:
 - Keep single-component architecture unless complexity truly requires splitting
 - Maintain backward compatibility with static curriculum
-- Follow existing AI integration patterns
-- Preserve code block rendering system
-- Use same progress tracking approach for new async operations
+- Keep two-phase generation pattern to avoid timeouts
+- Any new AI features should use `callAPI()` helper function
+- Always include `anthropic-dangerous-direct-browser-access` header
+- Consider parallel module generation with rate limit handling
