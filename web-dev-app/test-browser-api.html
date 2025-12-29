@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API Test</title>
+</head>
+<body>
+    <h1>Testing API from Browser</h1>
+    <button onclick="testAPI()">Test API</button>
+    <pre id="output"></pre>
+
+    <script type="module">
+        const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY;
+
+        window.testAPI = async function() {
+            const output = document.getElementById('output');
+            output.textContent = 'Testing...\n';
+            output.textContent += `API Key present: ${apiKey ? 'YES' : 'NO'}\n`;
+            output.textContent += `API Key length: ${apiKey ? apiKey.length : 0}\n\n`;
+
+            if (!apiKey) {
+                output.textContent += 'ERROR: API key not found!\n';
+                output.textContent += 'Make sure server was restarted after adding .env file';
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/v1/messages', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-api-key': apiKey,
+                        'anthropic-version': '2023-06-01'
+                    },
+                    body: JSON.stringify({
+                        model: 'claude-sonnet-4-20250514',
+                        max_tokens: 50,
+                        messages: [{ role: 'user', content: 'Say "API works!"' }]
+                    })
+                });
+
+                output.textContent += `Response status: ${response.status}\n`;
+
+                if (!response.ok) {
+                    const error = await response.text();
+                    output.textContent += `ERROR: ${error}\n`;
+                    return;
+                }
+
+                const data = await response.json();
+                output.textContent += `SUCCESS!\n`;
+                output.textContent += `Response: ${data.content[0].text}\n`;
+            } catch (error) {
+                output.textContent += `ERROR: ${error.message}\n`;
+            }
+        }
+    </script>
+</body>
+</html>

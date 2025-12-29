@@ -1,0 +1,29 @@
+nternet of Things in the Cloud
+Artificial Intelligence on the Cloud
+Blockchain and Analytics in the Cloud
+IaaS - Infrastructure as a Service
+PaaS - Platform as a Service
+Private Cloud
+Hybrid Cloud
+Cloud Infrastructure
+Virtualization and Virtual Machines
+Types of Virtual Machines
+Bare Metal Servers
+Secure Networking in Cloud
+Containers
+Storage on Cloud
+File Storage
+Block Storage
+CDN - Content Delivery Networks
+Hybrid Multi-cloud
+Microservices
+Serverless Computing
+Cloud Native Applications
+DevOps on the Cloud
+Application Modernization
+Cloud Security
+Identity and Access Management
+Cloud Encryption
+Cloud Monitoring and Benefits
+
+
